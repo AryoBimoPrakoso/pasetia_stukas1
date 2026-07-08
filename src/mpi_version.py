@@ -12,6 +12,7 @@ from common import (
     calculate_checksum, format_result_summary, save_result_to_csv
 )
 import os
+import pandas as pd
 
 @njit
 def compute_local_rows(matrix: np.ndarray, start_row: int, end_row: int) -> np.ndarray:
@@ -50,7 +51,7 @@ def find_local_max(local_result: np.ndarray):
 
 def warmup_numba():
     """Melakukan warm-up JIT agar kompilasi tidak masuk ke waktu eksekusi MPI."""
-    dummy_matrix = np.ones((10, 10), dtype=np.int32)
+    dummy_matrix = np.ones((10, 10), dtype=np.int64)
     res = compute_local_rows(dummy_matrix, 0, 5)
     find_local_max(res)
 
@@ -64,23 +65,22 @@ def main():
     parser.add_argument("--seed", type=int, default=12345, help="Random seed")
     parser.add_argument("--test-mode", action="store_true", help="Gunakan matriks 3x3 untuk pengujian")
     parser.add_argument("--run-idx", type=int, default=1, help="Indeks run untuk CSV")
+    parser.add_argument("--csv", type=str, default="snapgram_dummy_dataset_1024x1024.csv", help="Path File CSV matriks")
     
     args = parser.parse_args()
     
     # Warm-up JIT di semua process
     warmup_numba()
     
-    n = args.size
+    # Bungkus variabel `n` ke dalam array NumPy agar bisa di-Bcast dengan aman oleh mpi4py
+    n_arr = np.array([args.size], dtype=np.int32)
+    
     if args.test_mode:
-        n = 3
+        n_arr[0] = 3
         
-    if size > n:
-        if rank == 0:
-            print(f"Error: Jumlah process ({size}) lebih besar dari ukuran matriks ({n}).")
-        MPI.Finalize()
-        return
+    matrix = None
 
-    # Rank 0 membuat dan mendistribusikan data
+    # Rank 0 bertugas memuat atau membuat data asal
     if rank == 0:
         if args.test_mode:
             if size > 3:
@@ -89,11 +89,38 @@ def main():
             print("Menjalankan mode pengujian (Test Mode)...")
             matrix = get_test_matrix()
         else:
-            matrix = generate_matrix(n, args.seed)
-    else:
-        matrix = np.empty((n, n), dtype=np.int32)
+            csv_filename = args.csv
+            print(f"Membaca data SnapGram dari file: {csv_filename}")
         
-    # Menyiarkan matriks input ke seluruh process
+            if os.path.exists(csv_filename):
+                df = pd.read_csv(csv_filename)
+                # Buang kolom non-numerik
+                matrix_numerik = df.drop(columns=['UserID', 'Persona'], errors='ignore').to_numpy(dtype=np.int64)
+                matrix = matrix_numerik
+                n_arr[0] = matrix.shape[0]  # Update ukuran matrix berdasarkan real data CSV
+                print(f"Berhasil memuat matriks SnapGram dengan ukuran {n_arr[0]}x{n_arr[0]}")
+            else:
+                print(f"File {csv_filename} tidak ditemukan! Menggunakan data random fallback...")
+                matrix = generate_matrix(n_arr[0], args.seed)
+                # Pastikan tipe datanya int64 agar konsisten dengan proses local
+                matrix = matrix.astype(np.int64)
+
+    # --- KUNCI PERBAIKAN ---
+    # Broadcast nilai `n` yang sebenarnya ke seluruh Rank agar sinkron
+    comm.Bcast(n_arr, root=0)
+    n = int(n_arr[0])
+    
+    if size > n:
+        if rank == 0:
+            print(f"Error: Jumlah process ({size}) lebih besar dari ukuran matriks ({n}).")
+        MPI.Finalize()
+        return
+
+    # Rank selain 0 mengalokasikan ruang memori kosong untuk menerima data Broadcast matrix
+    if rank != 0:
+        matrix = np.empty((n, n), dtype=np.int64)
+        
+    # Sekarang aman menyiarkan matriks karena semua Rank memiliki dimensi `n` yang sama
     comm.Bcast(matrix, root=0)
     
     # Menghitung pembagian kerja (baris untuk tiap process)
@@ -135,7 +162,6 @@ def main():
     global_total_time = comm.reduce(local_total_time, op=MPI.MAX, root=0)
     
     # Mengumpulkan (gather) matriks hasil ke Rank 0
-    # Kita menggunakan Gatherv karena jumlah baris tiap process bisa berbeda
     if rank == 0:
         global_result = np.zeros((n, n), dtype=np.int64)
         global_max_values = np.zeros(n, dtype=np.int64)

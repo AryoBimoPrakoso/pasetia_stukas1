@@ -12,6 +12,7 @@ from common import (
     calculate_checksum, format_result_summary, save_result_to_csv
 )
 import os
+import pandas as pd  # <--- Tambahkan ini di bagian atas bersama import lainnya
 
 @njit
 def matrix_multiply_sequential(matrix: np.ndarray) -> np.ndarray:
@@ -71,7 +72,25 @@ def main():
         matrix = get_test_matrix()
         args.size = 3
     else:
-        matrix = generate_matrix(args.size, args.seed)
+        # --- UBAH BAGIAN INI ---
+        csv_filename = "snapgram_dummy_dataset_1024x1024.csv"
+        print(f"Membaca data SnapGram dari file: {csv_filename}")
+        
+        if os.path.exists(csv_filename):
+            # 1. Baca file CSV menggunakan pandas
+            df = pd.read_csv(csv_filename)
+            
+            # 2. Buang kolom 'UserID' dan 'Persona' karena isinya teks, 
+            #    kita hanya ambil kolom 'Sport_001' sampai akhir.
+            matrix_numerik = df.drop(columns=['UserID', 'Persona']).to_numpy(dtype=np.int64)
+            
+            # 3. Masukkan ke variabel matrix untuk diproses rumusmu
+            matrix = matrix_numerik
+            args.size = matrix.shape[0]  # otomatis mengikuti jumlah baris data CSV (1024)
+            print(f"Berhasil memuat matriks SnapGram dengan ukuran {args.size}x{args.size}")
+        else:
+            print(f"File {csv_filename} tidak ditemukan! Menggunakan data random fallback...")
+            matrix = generate_matrix(args.size, args.seed)
         
     # Mulai pengukuran waktu perkalian
     t0_mult = time.perf_counter()
