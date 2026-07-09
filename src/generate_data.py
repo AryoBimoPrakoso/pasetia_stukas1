@@ -1,7 +1,7 @@
 import random
 import pandas as pd
 
-JUMLAH_USER = 1024
+JUMLAH_USER = 256
 
 gender = ["L", "P"]
 
@@ -42,7 +42,7 @@ for i in range(JUMLAH_USER):
 df = pd.DataFrame(rows)
 
 df.to_csv(
-    "users_1024.csv",
+    "users_256.csv",
     index=False,
     encoding="utf-8-sig"
 )

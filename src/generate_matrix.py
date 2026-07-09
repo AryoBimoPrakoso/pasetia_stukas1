@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 
-df = pd.read_csv("users_1024.csv")
+df = pd.read_csv("users_256.csv")
 
 n = len(df)
 
@@ -63,7 +63,7 @@ for i in range(n):
         matrix[i,j] = similarity(user_a,user_b)
 
 pd.DataFrame(matrix).to_csv(
-    "similarity_matrix_1024.csv",
+    "similarity_matrix_256.csv",
     index=False,
     header=False
 )
