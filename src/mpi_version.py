@@ -30,6 +30,56 @@ def compute_local_rows(matrix: np.ndarray, start_row: int, end_row: int) -> np.n
     return local_result
 
 
+def find_row_max_excluding_self(result_matrix: np.ndarray):
+    """Mencari nilai & indeks kolom maksimum per baris, mengecualikan elemen
+    diagonal (self-similarity) agar hasil narasi lebih bermakna."""
+    n = result_matrix.shape[0]
+    max_values = np.zeros(n, dtype=np.int64)
+    max_indices = np.zeros(n, dtype=np.int32)
+    for i in range(n):
+        current_max = None
+        current_col = -1
+        for j in range(n):
+            if j == i:
+                continue
+            val = result_matrix[i, j]
+            if current_max is None or val > current_max:
+                current_max = val
+                current_col = j
+        max_values[i] = current_max
+        max_indices[i] = current_col
+    return max_values, max_indices
+
+
+def load_labels(labels_path: str):
+    """Memuat file label (UserID, Umur, Gender, Daerah, Kategori) jika tersedia."""
+    if labels_path and os.path.exists(labels_path):
+        return pd.read_csv(labels_path)
+    return None
+
+
+def describe_user(labels_df, idx: int) -> str:
+    """Membuat deskripsi singkat untuk satu user berdasarkan indeks baris."""
+    if labels_df is None or idx >= len(labels_df):
+        return f"User#{idx}"
+    row = labels_df.iloc[idx]
+    return f"{row['UserID']} ({row['Kategori']}, {row['Daerah']})"
+
+
+def build_similarity_narrative(labels_df, max_indices, max_values=None) -> list:
+    """Mengubah hasil (index kolom termirip per baris) menjadi kalimat naratif.
+    Jika max_values diberikan, ditambahkan catatan skor mentah di akhir kalimat."""
+    narratives = []
+    for i, j in enumerate(max_indices):
+        src = describe_user(labels_df, i)
+        tgt = describe_user(labels_df, int(j))
+        if max_values is not None:
+            narratives.append(f"{src} lebih mirip ke {tgt} (catatan: nilai kemiripan = {max_values[i]})")
+        else:
+            narratives.append(f"{src} lebih mirip ke {tgt}")
+    return narratives
+
+
 def find_local_max(local_result: np.ndarray):
     """Mencari nilai maksimum untuk baris yang menjadi tanggung jawab process ini (pure Python)."""
     num_rows = local_result.shape[0]
@@ -62,6 +112,7 @@ def main():
     parser.add_argument("--test-mode", action="store_true", help="Gunakan matriks 3x3 untuk pengujian")
     parser.add_argument("--run-idx", type=int, default=1, help="Indeks run untuk CSV")
     parser.add_argument("--csv", type=str, default="similarity_matrix_256.csv", help="Path File CSV matriks")
+    parser.add_argument("--labels", type=str, default="users_256.csv", help="Nama file CSV label/identitas user")
 
     args = parser.parse_args()
 
@@ -211,10 +262,27 @@ def main():
             is_valid=is_valid
         ))
 
-        print("\nLima hasil baris pertama (maksimum dan indeks kolom):")
-        limit = min(5, n)
-        for i in range(limit):
-            print(f"Row {i}: max = {global_max_values[i]}, column = {global_max_indices[i]}")
+        labels_df = None if args.test_mode else load_labels(args.labels)
+
+        if labels_df is not None:
+            narrative_values, narrative_indices = find_row_max_excluding_self(global_result)
+
+            print("\nLima contoh hasil kemiripan (naratif, tanpa self-match):")
+            limit = min(5, n)
+            for narrative in build_similarity_narrative(labels_df, narrative_indices[:limit], narrative_values[:limit]):
+                print(narrative)
+
+            # Simpan laporan naratif lengkap untuk semua user
+            all_narratives = build_similarity_narrative(labels_df, narrative_indices, narrative_values)
+            os.makedirs('results', exist_ok=True)
+            report_path = "results/similarity_narrative_mpi.csv"
+            pd.DataFrame({"Ringkasan_Kemiripan": all_narratives}).to_csv(report_path, index=False)
+            print(f"\nLaporan naratif lengkap disimpan di: {report_path}")
+        else:
+            print("\nLima hasil baris pertama (maksimum dan indeks kolom):")
+            limit = min(5, n)
+            for i in range(limit):
+                print(f"Row {i}: max = {global_max_values[i]}, column = {global_max_indices[i]}")
 
         if not args.test_mode:
             save_result_to_csv(
